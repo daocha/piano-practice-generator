@@ -1,0 +1,4 @@
+.git
+certs/
+server.log
+.server.pid

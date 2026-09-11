@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>簡譜練習產生器</title>
+
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#10131a">
+
+<!-- iOS PWA support -->
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="簡譜產生器">
+<meta name="mobile-web-app-capable" content="yes">
+
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="app-title">DCHA Piano Practice Generator</div>
+
+<header id="controlBar" class="control-bar">
+  <button id="toggleControls" class="icon-btn" title="收合/展開設定" aria-label="收合設定">▾</button>
+
+  <div class="control-group">
+    <label>音符範圍</label>
+    <div class="range-pair">
+      <input type="number" id="noteMin" min="1" max="7" value="1" inputmode="numeric">
+      <span class="dash">–</span>
+      <input type="number" id="noteMax" min="1" max="7" value="5" inputmode="numeric">
+    </div>
+  </div>
+
+  <div class="control-group">
+    <label for="beatsPerMeasure">每小節拍數</label>
+    <input type="number" id="beatsPerMeasure" min="1" max="12" value="4" inputmode="numeric">
+  </div>
+
+  <div class="control-group">
+    <label for="totalMeasures">小節數</label>
+    <input type="number" id="totalMeasures" min="1" max="64" value="4" inputmode="numeric">
+  </div>
+
+  <div class="control-group">
+    <label for="subdivision">最小拍值 (1/n)</label>
+    <input type="number" id="subdivision" min="1" max="8" value="4" inputmode="numeric">
+  </div>
+
+  <div class="control-group checkbox-group">
+    <label for="allowDot">附點</label>
+    <input type="checkbox" id="allowDot">
+  </div>
+
+  <button id="generateBtn" class="generate-btn">生成</button>
+</header>
+
+<main id="scoreWrap" class="score-wrap">
+  <div id="pullIndicator" class="pull-indicator"><div class="pull-spinner"></div></div>
+  <div id="score" class="score"></div>
+  <div id="loadingOverlay" class="loading-overlay hidden">
+    <div class="spinner"></div>
+    <div class="loading-text">生成中…</div>
+  </div>
+  <div id="emptyState" class="empty-state">按「生成」開始產生練習簡譜</div>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
