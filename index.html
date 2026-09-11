@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>簡譜練習產生器</title>
+
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#10131a">
+
+<!-- iOS PWA support -->
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="簡譜產生器">
+<meta name="mobile-web-app-capable" content="yes">
+
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="app-title">DCHA Piano Practice Generator</div>
+
+<header id="controlBar" class="control-bar">
+  <button id="toggleControls" class="icon-btn" title="收合/展開設定" aria-label="收合設定">▾</button>
+
+  <div class="control-group">
+    <label>音符範圍</label>
+    <div class="range-pair">
+      <input type="number" id="noteMin" min="1" max="7" value="1" inputmode="numeric">
+      <span class="dash">–</span>
+      <input type="number" id="noteMax" min="1" max="7" value="5" inputmode="numeric">
+    </div>
+  </div>
+
+  <div class="control-group">
+    <label for="beatsPerMeasure">每小節拍數</label>
+    <input type="number" id="beatsPerMeasure" min="1" max="12" value="4" inputmode="numeric">
+  </div>
+
+  <div class="control-group">
+    <label for="totalMeasures">小節數</label>
+    <input type="number" id="totalMeasures" min="1" max="64" value="4" inputmode="numeric">
+  </div>
+
+  <div class="control-group">
+    <label for="subdivision">最小拍值 (1/n)</label>
+    <input type="number" id="subdivision" min="1" max="8" value="4" inputmode="numeric">
+  </div>
+
+  <div class="control-group checkbox-group">
+    <label for="allowDot">附點</label>
+    <input type="checkbox" id="allowDot">
+  </div>
+
+  <button id="metronomeBtn" class="metronome-btn" title="節拍器" aria-label="節拍器">
+    <svg class="metronome-icon" viewBox="0 0 20 32" width="16" height="22">
+      <path d="M7 2 L13 2 L17.5 29 L2.5 29 Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+      <line x1="4" y1="29" x2="16" y2="29" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+      <line x1="10" y1="27" x2="13.5" y2="5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      <circle cx="12.6" cy="14" r="1.7" fill="currentColor"/>
+    </svg>
+    <span class="metronome-dot"></span>
+  </button>
+
+  <button id="generateBtn" class="generate-btn">生成</button>
+</header>
+
+<main id="scoreWrap" class="score-wrap">
+  <div id="pullIndicator" class="pull-indicator"><div class="pull-spinner"></div></div>
+  <div id="score" class="score"></div>
+  <div id="loadingOverlay" class="loading-overlay hidden">
+    <div class="spinner"></div>
+    <div class="loading-text">生成中…</div>
+  </div>
+  <div id="emptyState" class="empty-state">按「生成」開始產生練習簡譜</div>
+</main>
+
+<div id="metronomeModal" class="modal-overlay hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <span>節拍器</span>
+      <button id="metronomeClose" class="icon-btn" aria-label="關閉">✕</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="tempo-row">
+        <div class="tempo-slider-wrap">
+          <input type="range" id="tempoSlider" class="tempo-slider" min="40" max="240" step="1" value="100">
+        </div>
+        <div class="tempo-display">
+          <div class="tempo-adjust-row">
+            <button id="tempoMinus" class="tempo-adjust-btn" aria-label="減少速度">−</button>
+            <div id="tempoValue" class="tempo-value">100</div>
+            <button id="tempoPlus" class="tempo-adjust-btn" aria-label="增加速度">+</button>
+          </div>
+          <div class="tempo-unit">BPM</div>
+        </div>
+      </div>
+
+      <div class="subdiv-row" id="subdivRow">
+        <button class="subdiv-option" data-subdiv="1" aria-label="每拍一下">
+          <svg class="note-icon-svg" viewBox="0 0 18 34" width="18" height="34">
+            <circle cx="7" cy="27" r="4"/>
+            <line x1="11" y1="26" x2="11" y2="4"/>
+          </svg>
+        </button>
+        <button class="subdiv-option" data-subdiv="2" aria-label="每半拍一下">
+          <svg class="note-icon-svg" viewBox="0 0 34 34" width="34" height="34">
+            <circle cx="7" cy="27" r="4"/>
+            <circle cx="27" cy="27" r="4"/>
+            <line x1="11" y1="26" x2="11" y2="4"/>
+            <line x1="31" y1="26" x2="31" y2="4"/>
+            <line x1="11" y1="4" x2="31" y2="4" stroke-width="2.6"/>
+          </svg>
+        </button>
+        <button class="subdiv-option" data-subdiv="3" aria-label="每1/3拍一下">
+          <svg class="note-icon-svg" viewBox="0 0 50 34" width="50" height="34">
+            <circle cx="7" cy="27" r="4"/>
+            <circle cx="25" cy="27" r="4"/>
+            <circle cx="43" cy="27" r="4"/>
+            <line x1="11" y1="26" x2="11" y2="4"/>
+            <line x1="29" y1="26" x2="29" y2="4"/>
+            <line x1="47" y1="26" x2="47" y2="4"/>
+            <line x1="11" y1="4" x2="47" y2="4" stroke-width="2.6"/>
+          </svg>
+        </button>
+        <button class="subdiv-option" data-subdiv="4" aria-label="每1/4拍一下">
+          <svg class="note-icon-svg" viewBox="0 0 66 34" width="66" height="34">
+            <circle cx="7" cy="27" r="4"/>
+            <circle cx="23" cy="27" r="4"/>
+            <circle cx="39" cy="27" r="4"/>
+            <circle cx="55" cy="27" r="4"/>
+            <line x1="11" y1="26" x2="11" y2="4"/>
+            <line x1="27" y1="26" x2="27" y2="4"/>
+            <line x1="43" y1="26" x2="43" y2="4"/>
+            <line x1="59" y1="26" x2="59" y2="4"/>
+            <line x1="11" y1="4" x2="59" y2="4" stroke-width="2.6"/>
+            <line x1="11" y1="9" x2="59" y2="9" stroke-width="2.6"/>
+          </svg>
+        </button>
+      </div>
+
+      <button id="metronomeToggle" class="metronome-play-btn">▶ 開始</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

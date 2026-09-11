@@ -1,0 +1,14 @@
+services:
+  jianpu-generator:
+    build: .
+    container_name: jianpu-generator
+    ports:
+      - "${PORT:-6010}:6010"
+    environment:
+      - PORT=6010
+    # To serve HTTPS (self-signed cert) instead, uncomment:
+    # command: ["node", "server.js", "--https"]
+    # and persist the generated cert across restarts with:
+    # volumes:
+    #   - ./certs:/app/certs
+    restart: unless-stopped
