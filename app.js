@@ -16,6 +16,15 @@
     score: document.getElementById('score'),
     loadingOverlay: document.getElementById('loadingOverlay'),
     pullIndicator: document.getElementById('pullIndicator'),
+    metronomeBtn: document.getElementById('metronomeBtn'),
+    metronomeModal: document.getElementById('metronomeModal'),
+    metronomeClose: document.getElementById('metronomeClose'),
+    tempoSlider: document.getElementById('tempoSlider'),
+    tempoValue: document.getElementById('tempoValue'),
+    tempoMinus: document.getElementById('tempoMinus'),
+    tempoPlus: document.getElementById('tempoPlus'),
+    subdivRow: document.getElementById('subdivRow'),
+    metronomeToggle: document.getElementById('metronomeToggle'),
   };
 
   // ---------- Helpers ----------
@@ -471,6 +480,135 @@
     if (saved.background) el.scoreWrap.style.background = saved.background;
     el.scoreWrap.classList.add('has-content');
   })();
+
+  // ---------- Metronome ----------
+  const METRONOME_KEY = 'jianpu-metronome-v1';
+  const SCHEDULE_AHEAD = 0.12; // seconds
+  const LOOKAHEAD_MS = 25;
+
+  let metroBpm = 100;
+  let metroSubdiv = 1;
+  let metroPlaying = false;
+  let audioCtx = null;
+  let nextNoteTime = 0;
+  let clickInBeat = 0;
+  let schedulerId = null;
+
+  function loadMetronomeState() {
+    try {
+      const raw = localStorage.getItem(METRONOME_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function saveMetronomeState() {
+    try {
+      localStorage.setItem(METRONOME_KEY, JSON.stringify({ bpm: metroBpm, subdiv: metroSubdiv }));
+    } catch (e) { /* ignore */ }
+  }
+
+  function setActiveSubdivButton() {
+    el.subdivRow.querySelectorAll('.subdiv-option').forEach((btn) => {
+      btn.classList.toggle('active', parseInt(btn.dataset.subdiv, 10) === metroSubdiv);
+    });
+  }
+
+  function scheduleClick(time, accent) {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.frequency.value = accent ? 1500 : 1000;
+    gain.gain.setValueAtTime(accent ? 0.9 : 0.45, time);
+    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.05);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(time);
+    osc.stop(time + 0.06);
+  }
+
+  function metronomeScheduler() {
+    while (nextNoteTime < audioCtx.currentTime + SCHEDULE_AHEAD) {
+      scheduleClick(nextNoteTime, clickInBeat === 0);
+      const beatDuration = 60 / metroBpm;
+      nextNoteTime += beatDuration / metroSubdiv;
+      clickInBeat = (clickInBeat + 1) % metroSubdiv;
+    }
+    schedulerId = setTimeout(metronomeScheduler, LOOKAHEAD_MS);
+  }
+
+  function startMetronome() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    clickInBeat = 0;
+    nextNoteTime = audioCtx.currentTime + 0.05;
+    metronomeScheduler();
+    metroPlaying = true;
+    el.metronomeToggle.textContent = '⏸ 停止';
+    el.metronomeToggle.classList.add('playing');
+    el.metronomeBtn.classList.add('playing');
+  }
+
+  function stopMetronome() {
+    metroPlaying = false;
+    if (schedulerId) clearTimeout(schedulerId);
+    schedulerId = null;
+    el.metronomeToggle.textContent = '▶ 開始';
+    el.metronomeToggle.classList.remove('playing');
+    el.metronomeBtn.classList.remove('playing');
+  }
+
+  (function initMetronome() {
+    const saved = loadMetronomeState();
+    if (saved) {
+      metroBpm = clamp(parseInt(saved.bpm, 10) || 100, 40, 240);
+      metroSubdiv = [1, 2, 3, 4].includes(saved.subdiv) ? saved.subdiv : 1;
+    }
+    el.tempoSlider.value = metroBpm;
+    el.tempoValue.textContent = metroBpm;
+    setActiveSubdivButton();
+  })();
+
+  el.metronomeBtn.addEventListener('click', () => {
+    el.metronomeModal.classList.remove('hidden');
+  });
+
+  el.metronomeClose.addEventListener('click', () => {
+    el.metronomeModal.classList.add('hidden');
+  });
+
+  el.metronomeModal.addEventListener('click', (e) => {
+    if (e.target === el.metronomeModal) el.metronomeModal.classList.add('hidden');
+  });
+
+  function setTempo(bpm) {
+    metroBpm = clamp(bpm, 40, 240);
+    el.tempoSlider.value = metroBpm;
+    el.tempoValue.textContent = metroBpm;
+    saveMetronomeState();
+  }
+
+  el.tempoSlider.addEventListener('input', () => {
+    setTempo(parseInt(el.tempoSlider.value, 10));
+  });
+
+  el.tempoMinus.addEventListener('click', () => setTempo(metroBpm - 1));
+  el.tempoPlus.addEventListener('click', () => setTempo(metroBpm + 1));
+
+  el.subdivRow.addEventListener('click', (e) => {
+    const btn = e.target.closest('.subdiv-option');
+    if (!btn) return;
+    metroSubdiv = parseInt(btn.dataset.subdiv, 10);
+    setActiveSubdivButton();
+    saveMetronomeState();
+  });
+
+  el.metronomeToggle.addEventListener('click', () => {
+    if (metroPlaying) {
+      stopMetronome();
+    } else {
+      startMetronome();
+    }
+  });
 
   // ---------- PWA service worker ----------
   if ('serviceWorker' in navigator) {
