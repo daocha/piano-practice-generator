@@ -46,8 +46,8 @@ body {
   padding-top: max(5px, env(safe-area-inset-top));
 }
 
+.advanced-btn,
 .metronome-btn {
-  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -59,6 +59,15 @@ body {
   padding: 5px 12px;
   cursor: pointer;
   flex-shrink: 0;
+}
+
+.advanced-btn {
+  margin-left: auto;
+}
+
+.advanced-btn.open {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .metronome-icon {
@@ -160,16 +169,6 @@ body {
   border-color: var(--accent-dim);
 }
 
-.range-pair {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.range-pair .dash {
-  color: var(--text-dim);
-}
-
 .checkbox-group input[type="checkbox"] {
   width: 18px;
   height: 18px;
@@ -214,9 +213,15 @@ body {
   margin-top: -30px;
   transform: translateX(-50%);
   opacity: 0;
-  transition: transform 0.25s ease, opacity 0.25s ease;
   z-index: 6;
   pointer-events: none;
+}
+
+/* Only ease when snapping to rest/threshold - never while actively
+   tracking a finger drag, or every touchmove update fights the easing
+   and the indicator looks laggy/janky instead of following 1:1. */
+.pull-indicator.settling {
+  transition: transform 0.25s ease, opacity 0.25s ease;
 }
 
 .pull-spinner {
@@ -248,8 +253,7 @@ body {
   pointer-events: none;
 }
 
-.score-wrap.has-content .empty-state,
-.score-wrap.loading .empty-state {
+.score-wrap.has-content .empty-state {
   display: none;
 }
 
@@ -260,14 +264,15 @@ body {
 .time-sig {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang TC", "PingFang SC", sans-serif;
-  font-size: 1.3rem;
+  font-size: 0.85rem;
   font-weight: 600;
-  line-height: 1.15;
+  line-height: 1.05;
   color: var(--text-dim);
-  width: 2.4rem;
+  width: 1.1rem;
+  margin-right: 0.5rem;
   flex-shrink: 0;
 }
 
@@ -310,9 +315,13 @@ body {
   font-size: 2.1rem;
   font-weight: 500;
   font-family: Georgia, "Times New Roman", serif;
-  position: relative;
   line-height: 1;
-  padding-bottom: 2px;
+}
+
+.note-glyph {
+  position: relative;
+  display: inline-block;
+  padding-bottom: 7px;
 }
 
 .note .dot {
@@ -589,12 +598,15 @@ body {
 
 .note-icon-svg line {
   stroke: currentColor;
-  stroke-width: 1.8;
   stroke-linecap: round;
 }
 
-.note-icon-svg text {
-  fill: currentColor;
+.note-icon-svg .note-stem {
+  stroke-width: 1.6;
+}
+
+.note-icon-svg .note-beam {
+  stroke-width: 2.8;
 }
 
 .subdiv-option.active .note-icon-svg {
@@ -618,6 +630,132 @@ body {
   background: var(--input-bg);
   color: var(--accent);
   border: 1px solid var(--accent);
+}
+
+/* ---------- Advanced settings modal ---------- */
+
+.adv-body {
+  align-items: stretch;
+  gap: 18px;
+}
+
+.adv-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.adv-section:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.adv-row {
+  display: flex;
+  align-items: center;
+}
+
+.adv-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.adv-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.adv-checkbox-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.adv-sub-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-left: 26px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.adv-sub-row input[type="number"] {
+  width: 3.5em;
+  background: var(--input-bg);
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 13px;
+  text-align: center;
+}
+
+.adv-sub-row select {
+  background: var(--input-bg);
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 13px;
+}
+
+.adv-unit {
+  color: var(--text-dim);
+}
+
+.adv-hint {
+  padding-left: 26px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+/* ---------- Octave dots & rests ---------- */
+
+.oct-dot {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+
+.oct-dot-above {
+  top: -4px;
+}
+
+.oct-dot-below {
+  bottom: 0;
+}
+
+.note.rest {
+  color: var(--text-dim);
+}
+
+/* ---------- Two-hand mode ---------- */
+
+.voice-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.voice-stack .beats {
+  flex: 1;
 }
 
 /* ---------- Small screens ---------- */

@@ -1,7 +1,7 @@
 services:
-  jianpu-generator:
+  piano-practice-generator:
     build: .
-    container_name: jianpu-generator
+    container_name: piano-practice-generator
     ports:
       - "${PORT:-6010}:6010"
     environment:

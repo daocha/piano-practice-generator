@@ -5,8 +5,6 @@
   const el = {
     controlBar: document.getElementById('controlBar'),
     toggleControls: document.getElementById('toggleControls'),
-    noteMin: document.getElementById('noteMin'),
-    noteMax: document.getElementById('noteMax'),
     beatsPerMeasure: document.getElementById('beatsPerMeasure'),
     totalMeasures: document.getElementById('totalMeasures'),
     subdivision: document.getElementById('subdivision'),
@@ -25,6 +23,14 @@
     tempoPlus: document.getElementById('tempoPlus'),
     subdivRow: document.getElementById('subdivRow'),
     metronomeToggle: document.getElementById('metronomeToggle'),
+    advancedBtn: document.getElementById('advancedBtn'),
+    advancedModal: document.getElementById('advancedModal'),
+    advancedClose: document.getElementById('advancedClose'),
+    allowRest: document.getElementById('allowRest'),
+    restProbability: document.getElementById('restProbability'),
+    octaveMin: document.getElementById('octaveMin'),
+    octaveMax: document.getElementById('octaveMax'),
+    twoHandMode: document.getElementById('twoHandMode'),
   };
 
   // ---------- Helpers ----------
@@ -90,7 +96,7 @@
   }
 
   // ---------- Persistence ----------
-  const STORAGE_KEY = 'jianpu-gen-state-v1';
+  const STORAGE_KEY = 'jianpu-gen-state-v3';
 
   function saveState(config, rows, background) {
     try {
@@ -161,35 +167,53 @@
     return notes;
   }
 
-  // Assigns note values within a beat, avoiding an immediate repeat of the
-  // previous note's value when the selected range allows it.
-  function assignValues(notes, noteMin, noteMax) {
+  function cloneShape(notes) {
+    return notes.map((n) => ({ level: n.level, dotted: n.dotted, tuplet: n.tuplet }));
+  }
+
+  // Decides rests and pitch values within a beat (in place), avoiding an
+  // immediate repeat of the previous pitch when the selected range allows
+  // it. `noteMin`/`noteMax` are a 1-21 position (7 degrees x 3 octaves),
+  // decoded into {degree, octave} for rendering.
+  function applyRestsAndValues(notes, config) {
+    const { noteMin, noteMax, allowRest, restProbability } = config;
     let prev = null;
     notes.forEach((n) => {
-      let value = randInt(noteMin, noteMax);
+      if (allowRest && Math.random() < restProbability) {
+        n.rest = true;
+        return;
+      }
+      n.rest = false;
+      let raw = randInt(noteMin, noteMax);
       if (noteMax > noteMin) {
         let tries = 0;
-        while (value === prev && tries < 10) {
-          value = randInt(noteMin, noteMax);
+        while (raw === prev && tries < 10) {
+          raw = randInt(noteMin, noteMax);
           tries++;
         }
       }
-      n.value = value;
-      prev = value;
+      prev = raw;
+      const idx = raw - 1;
+      n.degree = (idx % 7) + 1;
+      n.octave = Math.floor(idx / 7) - 1; // -1, 0, or 1
     });
   }
 
   function generateScore(config) {
-    const { noteMin, noteMax, beatsPerMeasure, totalMeasures, subdivision, allowDot } = config;
+    const { beatsPerMeasure, totalMeasures, subdivision, allowDot, twoHandMode } = config;
+    const voiceCount = twoHandMode ? 2 : 1;
     const rows = [];
     for (let m = 0; m < totalMeasures; m++) {
-      const beats = [];
+      const voices = Array.from({ length: voiceCount }, () => []);
       for (let b = 0; b < beatsPerMeasure; b++) {
-        const notes = generateBeat(subdivision, allowDot);
-        assignValues(notes, noteMin, noteMax);
-        beats.push(notes);
+        const shape = generateBeat(subdivision, allowDot);
+        for (let v = 0; v < voiceCount; v++) {
+          const notes = cloneShape(shape);
+          applyRestsAndValues(notes, config);
+          voices[v].push(notes);
+        }
       }
-      rows.push(beats);
+      rows.push(voices);
     }
     return rows;
   }
@@ -261,7 +285,28 @@
     notes.forEach((n) => {
       const noteEl = document.createElement('span');
       noteEl.className = 'note';
-      noteEl.textContent = String(n.value);
+
+      // The digit + octave dot live in their own wrapper so the rhythm
+      // dot (appended after, as a sibling) never widens this box and
+      // throws off the octave dot's horizontal centering.
+      const glyph = document.createElement('span');
+      glyph.className = 'note-glyph';
+      if (n.rest) {
+        noteEl.classList.add('rest');
+        glyph.textContent = '0';
+      } else {
+        glyph.textContent = String(n.degree);
+        if (n.octave === 1) {
+          const oct = document.createElement('span');
+          oct.className = 'oct-dot oct-dot-above';
+          glyph.appendChild(oct);
+        } else if (n.octave === -1) {
+          const oct = document.createElement('span');
+          oct.className = 'oct-dot oct-dot-below';
+          glyph.appendChild(oct);
+        }
+      }
+      noteEl.appendChild(glyph);
       if (n.dotted) {
         const dot = document.createElement('span');
         dot.className = 'dot';
@@ -280,11 +325,18 @@
     return beatEl;
   }
 
+  function buildBeatsRow(beats, extraClass) {
+    const beatsWrap = document.createElement('div');
+    beatsWrap.className = extraClass ? `beats ${extraClass}` : 'beats';
+    beats.forEach((notes) => beatsWrap.appendChild(buildBeatEl(notes)));
+    return beatsWrap;
+  }
+
   function renderScore(rows, beatsPerMeasure) {
     el.score.innerHTML = '';
-    rows.forEach((beats, rowIndex) => {
+    rows.forEach((voices, rowIndex) => {
       const rowEl = document.createElement('div');
-      rowEl.className = 'row';
+      rowEl.className = voices.length > 1 ? 'row two-hand' : 'row';
 
       const gutter = document.createElement('div');
       gutter.className = 'time-sig';
@@ -298,10 +350,16 @@
       }
       rowEl.appendChild(gutter);
 
-      const beatsWrap = document.createElement('div');
-      beatsWrap.className = 'beats';
-      beats.forEach((notes) => beatsWrap.appendChild(buildBeatEl(notes)));
-      rowEl.appendChild(beatsWrap);
+      if (voices.length > 1) {
+        const stack = document.createElement('div');
+        stack.className = 'voice-stack';
+        voices.forEach((beats, vi) => {
+          stack.appendChild(buildBeatsRow(beats, vi === 1 ? 'voice-left' : 'voice-right'));
+        });
+        rowEl.appendChild(stack);
+      } else {
+        rowEl.appendChild(buildBeatsRow(voices[0]));
+      }
 
       const isLast = rowIndex === rows.length - 1;
       if (isLast) {
@@ -326,11 +384,9 @@
 
   // ---------- Config reading / validation ----------
   function readConfig() {
-    let noteMin = clamp(parseInt(el.noteMin.value, 10) || 1, 1, 7);
-    let noteMax = clamp(parseInt(el.noteMax.value, 10) || 7, 1, 7);
+    let noteMin = clamp(parseInt(el.octaveMin.value, 10) || 8, 1, 21);
+    let noteMax = clamp(parseInt(el.octaveMax.value, 10) || 12, 1, 21);
     if (noteMin > noteMax) [noteMin, noteMax] = [noteMax, noteMin];
-    el.noteMin.value = noteMin;
-    el.noteMax.value = noteMax;
 
     const beatsPerMeasure = clamp(parseInt(el.beatsPerMeasure.value, 10) || 4, 1, 12);
     el.beatsPerMeasure.value = beatsPerMeasure;
@@ -343,7 +399,16 @@
 
     const allowDot = el.allowDot.checked;
 
-    return { noteMin, noteMax, beatsPerMeasure, totalMeasures, subdivision, allowDot };
+    const allowRest = el.allowRest.checked;
+    const restProbability = clamp(parseInt(el.restProbability.value, 10) || 0, 0, 50) / 100;
+    el.restProbability.value = Math.round(restProbability * 100);
+
+    const twoHandMode = el.twoHandMode.checked;
+
+    return {
+      noteMin, noteMax, beatsPerMeasure, totalMeasures, subdivision, allowDot,
+      allowRest, restProbability, twoHandMode,
+    };
   }
 
   // ---------- Generate flow (with loading animation) ----------
@@ -355,7 +420,6 @@
     generating = true;
     const config = readConfig();
 
-    el.scoreWrap.classList.remove('has-content');
     if (showOverlay) el.loadingOverlay.classList.remove('hidden');
     el.generateBtn.disabled = true;
 
@@ -380,6 +444,38 @@
     el.controlBar.classList.toggle('collapsed');
   });
 
+  // ---------- Advanced settings (rests / octave range / two-hand mode) ----------
+  const OCTAVE_LABELS = ['低音', '', '高音'];
+
+  function populateOctaveSelect(selectEl, defaultPosition) {
+    selectEl.innerHTML = '';
+    for (let octIdx = 0; octIdx < 3; octIdx++) {
+      for (let degree = 1; degree <= 7; degree++) {
+        const position = octIdx * 7 + degree;
+        const opt = document.createElement('option');
+        opt.value = String(position);
+        opt.textContent = `${OCTAVE_LABELS[octIdx]}${degree}`;
+        if (position === defaultPosition) opt.selected = true;
+        selectEl.appendChild(opt);
+      }
+    }
+  }
+
+  populateOctaveSelect(el.octaveMin, 8); // mid-octave 1
+  populateOctaveSelect(el.octaveMax, 12); // mid-octave 5
+
+  el.advancedBtn.addEventListener('click', () => {
+    el.advancedModal.classList.remove('hidden');
+  });
+
+  el.advancedClose.addEventListener('click', () => {
+    el.advancedModal.classList.add('hidden');
+  });
+
+  el.advancedModal.addEventListener('click', (e) => {
+    if (e.target === el.advancedModal) el.advancedModal.classList.add('hidden');
+  });
+
   // ---------- Pull-to-refresh ----------
   // Short pull (installed PWA has no browser chrome / native refresh):
   // regenerate a new score. Long pull: force-clear caches and reload the
@@ -392,6 +488,7 @@
   let pullDist = 0;
 
   function resetPullIndicator() {
+    el.pullIndicator.classList.add('settling');
     el.pullIndicator.classList.remove('reload-ready');
     el.pullIndicator.style.opacity = 0;
     el.pullIndicator.style.transform = 'translate(-50%, 0)';
@@ -420,6 +517,7 @@
     }
     pullStartY = e.touches[0].clientY;
     pulling = true;
+    el.pullIndicator.classList.remove('settling');
   }, { passive: true });
 
   el.scoreWrap.addEventListener('touchmove', (e) => {
@@ -441,12 +539,12 @@
     if (!pulling) return;
     pulling = false;
     if (pullDist >= PULL_RELOAD_THRESHOLD) {
-      el.pullIndicator.classList.add('spinning');
+      el.pullIndicator.classList.add('settling', 'spinning');
       el.pullIndicator.style.opacity = '1';
       el.pullIndicator.style.transform = `translate(-50%, ${PULL_RELOAD_THRESHOLD}px)`;
       forceReload();
     } else if (pullDist >= PULL_REGEN_THRESHOLD) {
-      el.pullIndicator.classList.add('spinning');
+      el.pullIndicator.classList.add('settling', 'spinning');
       el.pullIndicator.style.opacity = '1';
       el.pullIndicator.style.transform = `translate(-50%, ${PULL_REGEN_THRESHOLD}px)`;
       handleGenerate({
@@ -469,12 +567,17 @@
     const saved = loadState();
     if (!saved || !saved.config || !saved.rows) return;
     const c = saved.config;
-    if (c.noteMin != null) el.noteMin.value = c.noteMin;
-    if (c.noteMax != null) el.noteMax.value = c.noteMax;
+
+    if (c.noteMin != null) el.octaveMin.value = c.noteMin;
+    if (c.noteMax != null) el.octaveMax.value = c.noteMax;
+
     if (c.beatsPerMeasure != null) el.beatsPerMeasure.value = c.beatsPerMeasure;
     if (c.totalMeasures != null) el.totalMeasures.value = c.totalMeasures;
     if (c.subdivision != null) el.subdivision.value = c.subdivision;
     el.allowDot.checked = !!c.allowDot;
+    el.allowRest.checked = !!c.allowRest;
+    if (c.restProbability != null) el.restProbability.value = Math.round(c.restProbability * 100);
+    el.twoHandMode.checked = !!c.twoHandMode;
 
     renderScore(saved.rows, c.beatsPerMeasure);
     if (saved.background) el.scoreWrap.style.background = saved.background;
