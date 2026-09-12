@@ -289,6 +289,8 @@ body {
   align-items: flex-start;
   flex: 1;
   min-width: 0;
+  position: relative;
+  gap: 1.6rem;
 }
 
 .beat {
@@ -296,16 +298,25 @@ body {
   flex-direction: column;
   flex: 1 1 0;
   min-width: 0;
-  margin-right: 1.6rem;
-}
-
-.beat:last-child {
-  margin-right: 0;
 }
 
 .notes-row {
   display: flex;
   align-items: flex-end;
+}
+
+.tie-arc {
+  position: absolute;
+  height: 12px;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.tie-arc path {
+  fill: none;
+  stroke: var(--text-dim);
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
 }
 
 .note {
@@ -763,5 +774,5 @@ body {
 @media (max-width: 480px) {
   .control-bar { font-size: 11.5px; gap: 6px 10px; }
   .note { font-size: 1.7rem; }
-  .beat { margin-right: 1.1rem; }
+  .row .beats { gap: 1.1rem; }
 }
