@@ -192,6 +192,21 @@
         </div>
         <div class="adv-hint">兩手節奏相同、音符各自獨立隨機，訓練同時讀兩行譜</div>
       </div>
+
+      <div class="adv-section">
+        <div class="adv-row">
+          <label class="adv-checkbox-label">
+            <input type="checkbox" id="allowTie">
+            允許連音(跨拍同音符加上圓滑線)
+          </label>
+        </div>
+        <div class="adv-sub-row">
+          <label for="tieProbability">連音機率</label>
+          <input type="number" id="tieProbability" min="0" max="50" value="15" inputmode="numeric">
+          <span class="adv-unit">%</span>
+        </div>
+        <div class="adv-hint">前一拍最後一音與下一拍第一音相同並用弧線連起來時，第二個音只需延續、不需重新彈奏</div>
+      </div>
     </div>
   </div>
 </div>

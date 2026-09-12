@@ -31,6 +31,8 @@
     octaveMin: document.getElementById('octaveMin'),
     octaveMax: document.getElementById('octaveMax'),
     twoHandMode: document.getElementById('twoHandMode'),
+    allowTie: document.getElementById('allowTie'),
+    tieProbability: document.getElementById('tieProbability'),
   };
 
   // ---------- Helpers ----------
@@ -199,6 +201,34 @@
     });
   }
 
+  // A tie is only real notation when the sustain can't be written as a
+  // single note - i.e. one side of the join is a partial-beat note
+  // (syncopation across the beat boundary). If BOTH beats are a single,
+  // undivided whole-beat note (`length === 1`, which by construction of
+  // splitNode's base case means level 0 / undotted / no tuplet - the note
+  // starts exactly on the beat and fills it), jianpu convention holds the
+  // pitch with a dash ("2 -") rather than re-striking the digit under a
+  // curved tie, so that combination is skipped entirely here.
+  function applyTiesAcrossBeats(beats, config) {
+    const { allowTie, tieProbability } = config;
+    if (!allowTie) return;
+    for (let i = 0; i < beats.length - 1; i++) {
+      if (beats[i].length === 1 && beats[i + 1].length === 1) continue;
+      // Don't chain a tie onto a beat whose own first note is already the
+      // receiving end of one - a 3-note tie chain (short-long-short) reads
+      // as unusual/rare notation, so keep every tie an isolated pair.
+      if (beats[i][0].tied) continue;
+      const a = beats[i][beats[i].length - 1];
+      const b = beats[i + 1][0];
+      if (a.rest || b.rest) continue;
+      if (Math.random() < tieProbability) {
+        b.degree = a.degree;
+        b.octave = a.octave;
+        b.tied = true;
+      }
+    }
+  }
+
   function generateScore(config) {
     const { beatsPerMeasure, totalMeasures, subdivision, allowDot, twoHandMode } = config;
     const voiceCount = twoHandMode ? 2 : 1;
@@ -213,6 +243,7 @@
           voices[v].push(notes);
         }
       }
+      voices.forEach((beats) => applyTiesAcrossBeats(beats, config));
       rows.push(voices);
     }
     return rows;
@@ -284,7 +315,7 @@
     notesRow.className = 'notes-row';
     notes.forEach((n) => {
       const noteEl = document.createElement('span');
-      noteEl.className = 'note';
+      noteEl.className = n.tied ? 'note tied' : 'note';
 
       // The digit + octave dot live in their own wrapper so the rhythm
       // dot (appended after, as a sibling) never widens this box and
@@ -380,6 +411,146 @@
 
       el.score.appendChild(rowEl);
     });
+
+    settleTieArcs();
+    watchTieArcLayout();
+    startTieArcGuard();
+    // Mobile browser chrome and text metrics can finish settling well after
+    // the DOM insertion. These final passes complement the ResizeObserver
+    // for position-only changes that do not emit a resize notification.
+    [300, 700, 1200].forEach((delay) => setTimeout(() => settleTieArcs(), delay));
+  }
+
+  // A deeply nested flex layout can keep changing after two consecutive
+  // frames report the same geometry (notably while the browser settles text
+  // metrics). Re-measure for the whole settling window instead of stopping
+  // early, otherwise an arc keeps a stale horizontal position.
+  function settleTieArcs(remainingFrames) {
+    if (remainingFrames === undefined) remainingFrames = 12;
+    positionTieArcs();
+    if (remainingFrames > 0) {
+      requestAnimationFrame(() => settleTieArcs(remainingFrames - 1));
+    }
+  }
+
+  // A tied note is always the first note of its beat (ties only ever span
+  // a beat boundary), so its partner is the last note of the previous beat
+  // - a sibling `.beat` element, not a sibling within the same notes-row.
+  function findTiePartner(noteEl) {
+    const beatEl = noteEl.closest('.beat');
+    const prevBeat = beatEl && beatEl.previousElementSibling;
+    if (!prevBeat || !prevBeat.classList.contains('beat')) return null;
+    const notes = prevBeat.querySelectorAll('.notes-row > .note');
+    return notes.length ? notes[notes.length - 1] : null;
+  }
+
+  // Ties are drawn as absolutely-positioned arcs spanning the two note
+  // elements they connect, sized from actual layout (flex item widths vary
+  // with note count/screen size, so this can't be done in pure CSS).
+  // Positioned via getBoundingClientRect against the shared `.beats`
+  // container since the two notes live in different beats (each their own
+  // flex item / offset context).
+  const TIE_ARC_GAP = 11; // px of clearance above the higher of the two notes
+
+  // The rhythm dot (e.g. "2˙" for a dotted note) is a sibling appended
+  // after `.note-glyph` inside `.note`, so the note box and the beat's
+  // equal-width slots do not necessarily share the digit's visual center.
+  // Use the rendered glyph's viewport rect. This is converted to the
+  // containing `.beats` coordinate system only after the final layout pass.
+  function noteAnchor(noteEl) {
+    const glyphEl = noteEl.querySelector('.note-glyph');
+    const glyphRect = glyphEl.getBoundingClientRect();
+    return {
+      left: glyphRect.left + glyphRect.width / 2,
+      top: glyphRect.top,
+    };
+  }
+
+  function positionTieArcs() {
+    window.__scoreWrapWidthLog = window.__scoreWrapWidthLog || [];
+    window.__scoreWrapWidthLog.push({ clientWidth: el.scoreWrap.clientWidth, offsetWidth: el.scoreWrap.offsetWidth, scrollHeight: el.scoreWrap.scrollHeight, clientHeight: el.scoreWrap.clientHeight, t: performance.now() });
+    // Clear any existing arcs from a previous render first, then measure
+    // everything on that clean slate before creating new ones - interleaving
+    // reads (getBoundingClientRect) with writes (removing/creating arcs) for
+    // many ties in one pass forces repeated synchronous layout, and some of
+    // those in-between reflows were observed to report stale flex geometry.
+    el.score.querySelectorAll('.tie-arc').forEach((n) => n.remove());
+    const specs = [];
+    el.score.querySelectorAll('.note.tied').forEach((noteEl) => {
+      const prevEl = findTiePartner(noteEl);
+      const beatsRow = noteEl.closest('.beats');
+      if (!prevEl || !beatsRow || prevEl.closest('.beats') !== beatsRow) return;
+      const prevG = noteAnchor(prevEl);
+      const curG = noteAnchor(noteEl);
+      const rowRect = beatsRow.getBoundingClientRect();
+      const left = prevG.left - rowRect.left;
+      const right = curG.left - rowRect.left;
+      const top = Math.min(prevG.top, curG.top) - rowRect.top - TIE_ARC_GAP;
+      specs.push({ beatsRow, left, right, top, prevCenter: prevG.left, curCenter: curG.left, noteEl, prevEl });
+    });
+
+    specs.forEach(({ beatsRow, left, right, top, prevCenter, curCenter, noteEl, prevEl }) => {
+      const arc = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      arc.setAttribute('class', 'tie-arc');
+      arc.setAttribute('viewBox', '0 0 100 12');
+      arc.setAttribute('preserveAspectRatio', 'none');
+      const curve = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      // Unlike a CSS border-radius, this path reaches x=0 and x=100 exactly:
+      // its visible endpoints are therefore directly over the two numerals.
+      curve.setAttribute('d', 'M 0 8 Q 50 0 100 8');
+      arc.appendChild(curve);
+      arc._debugNoteEl = noteEl;
+      arc._debugPrevEl = prevEl;
+      arc._debugBeatsRow = beatsRow;
+      // `left` and `right` are both relative to this arc's `.beats` parent.
+      arc.style.left = `${left}px`;
+      arc.style.width = `${Math.max(right - left, 0)}px`;
+      arc.style.top = `${top}px`;
+      beatsRow.appendChild(arc);
+
+      // The browser can round an SVG/flex offset differently from its parent
+      // coordinates. Correct from the arc's *painted* rectangle, so its two
+      // visible endpoints match the two glyph centers exactly.
+      const painted = arc.getBoundingClientRect();
+      arc.style.left = `${left + prevCenter - painted.left}px`;
+      arc.style.width = `${Math.max(0, right - left + (curCenter - prevCenter) - painted.width)}px`;
+    });
+  }
+
+  let tieLayoutObserver = null;
+  let tieLayoutFrame = null;
+  let tieArcGuard = null;
+
+  // Some mobile browsers adjust the scrollable flex area without emitting a
+  // resize event. Keep a lightweight guard while the generated score is
+  // visible so a late silent reflow cannot leave a tie behind its numerals.
+  function startTieArcGuard() {
+    if (tieArcGuard !== null) clearInterval(tieArcGuard);
+    tieArcGuard = setInterval(() => {
+      if (!document.hidden) positionTieArcs();
+    }, 200);
+  }
+
+  // The width of a beat controls every numeral center inside it. Observe all
+  // beats rather than only #score: a flex redistribution can move a glyph
+  // while leaving the score's own dimensions unchanged.
+  function watchTieArcLayout() {
+    if (!window.ResizeObserver) return;
+    if (tieLayoutObserver) tieLayoutObserver.disconnect();
+    tieLayoutObserver = new ResizeObserver(() => {
+      if (tieLayoutFrame !== null) return;
+      tieLayoutFrame = requestAnimationFrame(() => {
+        tieLayoutFrame = null;
+        settleTieArcs();
+      });
+    });
+    el.score.querySelectorAll('.beats, .beat').forEach((node) => tieLayoutObserver.observe(node));
+  }
+
+  window.addEventListener('resize', () => settleTieArcs());
+  el.scoreWrap.addEventListener('scroll', () => positionTieArcs(), { passive: true });
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => settleTieArcs());
   }
 
   // ---------- Config reading / validation ----------
@@ -405,9 +576,13 @@
 
     const twoHandMode = el.twoHandMode.checked;
 
+    const allowTie = el.allowTie.checked;
+    const tieProbability = clamp(parseInt(el.tieProbability.value, 10) || 0, 0, 50) / 100;
+    el.tieProbability.value = Math.round(tieProbability * 100);
+
     return {
       noteMin, noteMax, beatsPerMeasure, totalMeasures, subdivision, allowDot,
-      allowRest, restProbability, twoHandMode,
+      allowRest, restProbability, twoHandMode, allowTie, tieProbability,
     };
   }
 
@@ -578,6 +753,8 @@
     el.allowRest.checked = !!c.allowRest;
     if (c.restProbability != null) el.restProbability.value = Math.round(c.restProbability * 100);
     el.twoHandMode.checked = !!c.twoHandMode;
+    el.allowTie.checked = !!c.allowTie;
+    if (c.tieProbability != null) el.tieProbability.value = Math.round(c.tieProbability * 100);
 
     renderScore(saved.rows, c.beatsPerMeasure);
     if (saved.background) el.scoreWrap.style.background = saved.background;
@@ -649,6 +826,9 @@
     el.metronomeToggle.textContent = '⏸ 停止';
     el.metronomeToggle.classList.add('playing');
     el.metronomeBtn.classList.add('playing');
+    ensureShakePermission().then((granted) => {
+      if (granted && metroPlaying) attachShakeListener();
+    });
   }
 
   function stopMetronome() {
@@ -658,6 +838,70 @@
     el.metronomeToggle.textContent = '▶ 開始';
     el.metronomeToggle.classList.remove('playing');
     el.metronomeBtn.classList.remove('playing');
+    detachShakeListener();
+  }
+
+  // ---------- Shake-to-mute: stop the metronome if the device is shaken ----------
+  const SHAKE_THRESHOLD = 15; // m/s^2 change between readings
+  const SHAKE_COOLDOWN_MS = 1000;
+  // Starting the metronome re-arms this listener almost immediately (the
+  // permission promise resolves synchronously once already granted), but
+  // the device is often still physically settling right after the shake
+  // that triggered the previous stop (arm coming down, finger reaching for
+  // the button). Without this grace window that leftover motion reads as
+  // another shake and immediately stops the metronome right after it starts.
+  const SHAKE_ARM_GRACE_MS = 800;
+  let lastShakeTime = 0;
+  let lastAccel = null;
+  let shakeArmedAt = 0;
+  let shakePermissionState = 'unknown'; // unknown | granted | denied | unsupported
+
+  function needsMotionPermission() {
+    return typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function';
+  }
+
+  // Must be invoked synchronously from within a user-gesture handler (iOS
+  // requirement) - startMetronome() is only ever called from a click.
+  async function ensureShakePermission() {
+    if (shakePermissionState === 'granted') return true;
+    if (!needsMotionPermission()) {
+      shakePermissionState = typeof DeviceMotionEvent !== 'undefined' ? 'granted' : 'unsupported';
+      return shakePermissionState === 'granted';
+    }
+    try {
+      shakePermissionState = (await DeviceMotionEvent.requestPermission()) === 'granted' ? 'granted' : 'denied';
+    } catch (e) {
+      shakePermissionState = 'denied';
+    }
+    return shakePermissionState === 'granted';
+  }
+
+  function handleDeviceMotion(e) {
+    const acc = e.accelerationIncludingGravity;
+    if (!acc || acc.x == null) return;
+    if (lastAccel) {
+      const dx = acc.x - lastAccel.x;
+      const dy = acc.y - lastAccel.y;
+      const dz = acc.z - lastAccel.z;
+      const delta = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      const now = Date.now();
+      const armed = now - shakeArmedAt > SHAKE_ARM_GRACE_MS;
+      if (armed && delta > SHAKE_THRESHOLD && now - lastShakeTime > SHAKE_COOLDOWN_MS) {
+        lastShakeTime = now;
+        if (metroPlaying) stopMetronome();
+      }
+    }
+    lastAccel = { x: acc.x, y: acc.y, z: acc.z };
+  }
+
+  function attachShakeListener() {
+    lastAccel = null;
+    shakeArmedAt = Date.now();
+    window.addEventListener('devicemotion', handleDeviceMotion);
+  }
+
+  function detachShakeListener() {
+    window.removeEventListener('devicemotion', handleDeviceMotion);
   }
 
   (function initMetronome() {
