@@ -806,32 +806,66 @@
     });
   }
 
-  // One beat (accent click + any subdivision clicks) rendered offline and
-  // looped natively by <audio> - looping this exact unit forever reproduces
-  // the same accent-on-beat-one pattern the old live scheduler produced.
+  // A run of whole beats (each with its accent + subdivision clicks) is
+  // rendered offline and looped natively by <audio> - repeating this unit
+  // forever reproduces the same accent-on-every-beat pattern the old live
+  // scheduler produced. The unit spans several seconds rather than a single
+  // beat because <audio>'s loop isn't guaranteed sample-accurate across
+  // browsers - each wrap can add a sliver of gap, and wrapping less often
+  // shrinks how much of that error accumulates over time (it can't remove
+  // clock drift between two independent devices' audio hardware, only
+  // reduce the extra error this implementation itself would add on top).
   // A quiet continuous 20Hz tone is mixed in for the same reason the old
   // keep-alive oscillator existed: true digital silence between clicks
   // reads as "no audio" to a Bluetooth output's power management and it
   // drops the link into standby, causing an audible re-negotiation delay
   // before the next click. A genuinely non-zero (but inaudible) signal
   // keeps the link awake without anyone hearing it.
+  const LOOP_TARGET_SECONDS = 6;
+
+  // Rendering at a hardcoded 44100Hz and letting the device's real output
+  // hardware (commonly 48000Hz on iPads, often 44100Hz on desktops) play it
+  // back is exactly the kind of mismatch that makes a clip run audibly fast
+  // or slow if anything along the way - the offline renderer, or the
+  // decoder handed the WAV later - ever assumes the hardware rate instead
+  // of reading the file's own declared rate. Rendering at the device's own
+  // native rate sidesteps that class of bug entirely: requested and actual
+  // are the same number, so there's nothing left to silently coerce.
+  let cachedSampleRate = null;
+  function getDeviceSampleRate() {
+    if (cachedSampleRate) return cachedSampleRate;
+    try {
+      const probe = new (window.AudioContext || window.webkitAudioContext)();
+      cachedSampleRate = probe.sampleRate || 44100;
+      probe.close();
+    } catch (e) {
+      cachedSampleRate = 44100;
+    }
+    return cachedSampleRate;
+  }
+
   async function buildClickLoopBuffer(bpm, subdiv) {
-    const sampleRate = 44100;
+    const sampleRate = getDeviceSampleRate();
     const beatDuration = 60 / bpm;
-    const length = Math.max(1, Math.round(beatDuration * sampleRate));
+    const beatsPerLoop = Math.max(1, Math.round(LOOP_TARGET_SECONDS / beatDuration));
+    const loopDuration = beatDuration * beatsPerLoop;
+    const length = Math.max(1, Math.round(loopDuration * sampleRate));
     const ctx = new OfflineAudioContext(1, length, sampleRate);
 
-    for (let i = 0; i < subdiv; i++) {
-      const t = (beatDuration / subdiv) * i;
-      const accent = i === 0;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.frequency.value = accent ? 1500 : 1000;
-      gain.gain.setValueAtTime(accent ? 0.9 : 0.45, t);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
-      osc.connect(gain).connect(ctx.destination);
-      osc.start(t);
-      osc.stop(Math.min(t + 0.06, beatDuration));
+    for (let beat = 0; beat < beatsPerLoop; beat++) {
+      const beatStart = beat * beatDuration;
+      for (let i = 0; i < subdiv; i++) {
+        const t = beatStart + (beatDuration / subdiv) * i;
+        const accent = i === 0;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.frequency.value = accent ? 1500 : 1000;
+        gain.gain.setValueAtTime(accent ? 0.9 : 0.45, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(t);
+        osc.stop(Math.min(t + 0.06, beatStart + beatDuration));
+      }
     }
 
     const keepAliveOsc = ctx.createOscillator();
@@ -840,7 +874,7 @@
     keepAliveOsc.frequency.value = 20;
     keepAliveOsc.connect(keepAliveGain).connect(ctx.destination);
     keepAliveOsc.start(0);
-    keepAliveOsc.stop(beatDuration);
+    keepAliveOsc.stop(loopDuration);
 
     return ctx.startRendering();
   }
