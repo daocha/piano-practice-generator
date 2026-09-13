@@ -773,6 +773,8 @@
   let nextNoteTime = 0;
   let clickInBeat = 0;
   let schedulerId = null;
+  let keepAliveOsc = null;
+  let keepAliveGain = null;
 
   function loadMetronomeState() {
     try {
@@ -806,7 +808,37 @@
     osc.stop(time + 0.06);
   }
 
+  // Each click's oscillator only lives for ~60ms, so most of a beat is true
+  // digital silence (all-zero samples). Over a Bluetooth output, that reads
+  // as "no audio" to the headset/speaker's own power management, which
+  // drops the link into standby and has to re-negotiate it when the next
+  // real click arrives - that wake-up latency is what sounds like "plays a
+  // couple of clicks, long silence, repeat" (built-in speakers are fine).
+  // A *silent* (gain 0) keep-alive node still emits nothing but zero
+  // samples, indistinguishable from real silence to the Bluetooth link -
+  // it has to be genuinely non-zero, just quiet enough to be inaudible, so
+  // the link always sees a live signal and never stands by.
+  function startKeepAlive() {
+    if (keepAliveOsc) return;
+    keepAliveGain = audioCtx.createGain();
+    keepAliveGain.gain.value = 0.003;
+    keepAliveOsc = audioCtx.createOscillator();
+    keepAliveOsc.frequency.value = 20;
+    keepAliveOsc.connect(keepAliveGain).connect(audioCtx.destination);
+    keepAliveOsc.start();
+  }
+
+  function stopKeepAlive() {
+    if (!keepAliveOsc) return;
+    try { keepAliveOsc.stop(); } catch (e) { /* already stopped */ }
+    keepAliveOsc.disconnect();
+    keepAliveGain.disconnect();
+    keepAliveOsc = null;
+    keepAliveGain = null;
+  }
+
   function metronomeScheduler() {
+    if (audioCtx.state !== 'running') audioCtx.resume();
     while (nextNoteTime < audioCtx.currentTime + SCHEDULE_AHEAD) {
       scheduleClick(nextNoteTime, clickInBeat === 0);
       const beatDuration = 60 / metroBpm;
@@ -819,6 +851,7 @@
   function startMetronome() {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === 'suspended') audioCtx.resume();
+    startKeepAlive();
     clickInBeat = 0;
     nextNoteTime = audioCtx.currentTime + 0.05;
     metronomeScheduler();
@@ -835,6 +868,7 @@
     metroPlaying = false;
     if (schedulerId) clearTimeout(schedulerId);
     schedulerId = null;
+    stopKeepAlive();
     el.metronomeToggle.textContent = '▶ 開始';
     el.metronomeToggle.classList.remove('playing');
     el.metronomeBtn.classList.remove('playing');
