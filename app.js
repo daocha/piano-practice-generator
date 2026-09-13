@@ -762,19 +762,28 @@
   })();
 
   // ---------- Metronome ----------
+  // Playback is a looping <audio> element rather than a Web Audio scheduler:
+  // mobile browsers throttle setTimeout/requestAnimationFrame and suspend
+  // AudioContext as soon as the page is backgrounded (switching to another
+  // app, locking the screen), because pure Web Audio isn't recognized by the
+  // OS as "media playback". A real <audio> element handed to the native
+  // media pipeline, plus a registered MediaSession, keeps playing through
+  // that suspension the way a music app would.
   const METRONOME_KEY = 'jianpu-metronome-v1';
-  const SCHEDULE_AHEAD = 0.12; // seconds
-  const LOOKAHEAD_MS = 25;
 
   let metroBpm = 100;
   let metroSubdiv = 1;
   let metroPlaying = false;
-  let audioCtx = null;
-  let nextNoteTime = 0;
-  let clickInBeat = 0;
-  let schedulerId = null;
-  let keepAliveOsc = null;
-  let keepAliveGain = null;
+  let currentBlobUrl = null;
+  let regenTimer = null;
+  let regenToken = 0;
+
+  const metroAudio = new Audio();
+  metroAudio.loop = true;
+  metroAudio.preload = 'auto';
+  metroAudio.setAttribute('playsinline', '');
+  metroAudio.style.display = 'none';
+  document.body.appendChild(metroAudio);
 
   function loadMetronomeState() {
     try {
@@ -797,68 +806,133 @@
     });
   }
 
-  function scheduleClick(time, accent) {
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.frequency.value = accent ? 1500 : 1000;
-    gain.gain.setValueAtTime(accent ? 0.9 : 0.45, time);
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.05);
-    osc.connect(gain).connect(audioCtx.destination);
-    osc.start(time);
-    osc.stop(time + 0.06);
-  }
+  // One beat (accent click + any subdivision clicks) rendered offline and
+  // looped natively by <audio> - looping this exact unit forever reproduces
+  // the same accent-on-beat-one pattern the old live scheduler produced.
+  // A quiet continuous 20Hz tone is mixed in for the same reason the old
+  // keep-alive oscillator existed: true digital silence between clicks
+  // reads as "no audio" to a Bluetooth output's power management and it
+  // drops the link into standby, causing an audible re-negotiation delay
+  // before the next click. A genuinely non-zero (but inaudible) signal
+  // keeps the link awake without anyone hearing it.
+  async function buildClickLoopBuffer(bpm, subdiv) {
+    const sampleRate = 44100;
+    const beatDuration = 60 / bpm;
+    const length = Math.max(1, Math.round(beatDuration * sampleRate));
+    const ctx = new OfflineAudioContext(1, length, sampleRate);
 
-  // Each click's oscillator only lives for ~60ms, so most of a beat is true
-  // digital silence (all-zero samples). Over a Bluetooth output, that reads
-  // as "no audio" to the headset/speaker's own power management, which
-  // drops the link into standby and has to re-negotiate it when the next
-  // real click arrives - that wake-up latency is what sounds like "plays a
-  // couple of clicks, long silence, repeat" (built-in speakers are fine).
-  // A *silent* (gain 0) keep-alive node still emits nothing but zero
-  // samples, indistinguishable from real silence to the Bluetooth link -
-  // it has to be genuinely non-zero, just quiet enough to be inaudible, so
-  // the link always sees a live signal and never stands by.
-  function startKeepAlive() {
-    if (keepAliveOsc) return;
-    keepAliveGain = audioCtx.createGain();
-    keepAliveGain.gain.value = 0.003;
-    keepAliveOsc = audioCtx.createOscillator();
-    keepAliveOsc.frequency.value = 20;
-    keepAliveOsc.connect(keepAliveGain).connect(audioCtx.destination);
-    keepAliveOsc.start();
-  }
-
-  function stopKeepAlive() {
-    if (!keepAliveOsc) return;
-    try { keepAliveOsc.stop(); } catch (e) { /* already stopped */ }
-    keepAliveOsc.disconnect();
-    keepAliveGain.disconnect();
-    keepAliveOsc = null;
-    keepAliveGain = null;
-  }
-
-  function metronomeScheduler() {
-    if (audioCtx.state !== 'running') audioCtx.resume();
-    while (nextNoteTime < audioCtx.currentTime + SCHEDULE_AHEAD) {
-      scheduleClick(nextNoteTime, clickInBeat === 0);
-      const beatDuration = 60 / metroBpm;
-      nextNoteTime += beatDuration / metroSubdiv;
-      clickInBeat = (clickInBeat + 1) % metroSubdiv;
+    for (let i = 0; i < subdiv; i++) {
+      const t = (beatDuration / subdiv) * i;
+      const accent = i === 0;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = accent ? 1500 : 1000;
+      gain.gain.setValueAtTime(accent ? 0.9 : 0.45, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t);
+      osc.stop(Math.min(t + 0.06, beatDuration));
     }
-    schedulerId = setTimeout(metronomeScheduler, LOOKAHEAD_MS);
+
+    const keepAliveOsc = ctx.createOscillator();
+    const keepAliveGain = ctx.createGain();
+    keepAliveGain.gain.value = 0.003;
+    keepAliveOsc.frequency.value = 20;
+    keepAliveOsc.connect(keepAliveGain).connect(ctx.destination);
+    keepAliveOsc.start(0);
+    keepAliveOsc.stop(beatDuration);
+
+    return ctx.startRendering();
+  }
+
+  function audioBufferToWavBlob(buffer) {
+    const numCh = buffer.numberOfChannels;
+    const sampleRate = buffer.sampleRate;
+    const dataSize = buffer.length * numCh * 2;
+    const arrayBuffer = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(arrayBuffer);
+    const writeString = (offset, str) => {
+      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+    };
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + dataSize, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, numCh, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * numCh * 2, true);
+    view.setUint16(32, numCh * 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, 'data');
+    view.setUint32(40, dataSize, true);
+
+    const channelData = [];
+    for (let ch = 0; ch < numCh; ch++) channelData.push(buffer.getChannelData(ch));
+    let offset = 44;
+    for (let i = 0; i < buffer.length; i++) {
+      for (let ch = 0; ch < numCh; ch++) {
+        const sample = Math.max(-1, Math.min(1, channelData[ch][i]));
+        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+        offset += 2;
+      }
+    }
+    return new Blob([arrayBuffer], { type: 'audio/wav' });
+  }
+
+  async function regenerateClickLoop(bpm, subdiv) {
+    const token = ++regenToken;
+    const buffer = await buildClickLoopBuffer(bpm, subdiv);
+    if (token !== regenToken) return; // superseded by a newer tempo/subdiv change
+    const url = URL.createObjectURL(audioBufferToWavBlob(buffer));
+    const oldUrl = currentBlobUrl;
+    currentBlobUrl = url;
+    const wasPlaying = metroPlaying && !metroAudio.paused;
+    metroAudio.src = url;
+    if (wasPlaying) {
+      metroAudio.currentTime = 0;
+      metroAudio.play().catch(() => {});
+    }
+    if (oldUrl) URL.revokeObjectURL(oldUrl);
+  }
+
+  function scheduleRegenerate() {
+    clearTimeout(regenTimer);
+    regenTimer = setTimeout(() => regenerateClickLoop(metroBpm, metroSubdiv), 150);
+  }
+
+  function setupMediaSession() {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.metadata = new MediaMetadata({ title: '節拍器', artist: '簡譜產生器' });
+    navigator.mediaSession.setActionHandler('play', () => { if (!metroPlaying) startMetronome(); });
+    navigator.mediaSession.setActionHandler('pause', () => { if (metroPlaying) stopMetronome(); });
+    try {
+      navigator.mediaSession.setActionHandler('stop', () => { if (metroPlaying) stopMetronome(); });
+    } catch (e) { /* not supported everywhere */ }
+  }
+
+  function updateMediaSessionState(state) {
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = state;
   }
 
   function startMetronome() {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-    startKeepAlive();
-    clickInBeat = 0;
-    nextNoteTime = audioCtx.currentTime + 0.05;
-    metronomeScheduler();
+    metroAudio.currentTime = 0;
+    const playPromise = metroAudio.play();
     metroPlaying = true;
     el.metronomeToggle.textContent = '⏸ 停止';
     el.metronomeToggle.classList.add('playing');
     el.metronomeBtn.classList.add('playing');
+    updateMediaSessionState('playing');
+    if (playPromise && typeof playPromise.catch === 'function') {
+      playPromise.catch(() => {
+        metroPlaying = false;
+        el.metronomeToggle.textContent = '▶ 開始';
+        el.metronomeToggle.classList.remove('playing');
+        el.metronomeBtn.classList.remove('playing');
+        updateMediaSessionState('paused');
+      });
+    }
     ensureShakePermission().then((granted) => {
       if (granted && metroPlaying) attachShakeListener();
     });
@@ -866,9 +940,8 @@
 
   function stopMetronome() {
     metroPlaying = false;
-    if (schedulerId) clearTimeout(schedulerId);
-    schedulerId = null;
-    stopKeepAlive();
+    metroAudio.pause();
+    updateMediaSessionState('paused');
     el.metronomeToggle.textContent = '▶ 開始';
     el.metronomeToggle.classList.remove('playing');
     el.metronomeBtn.classList.remove('playing');
@@ -947,6 +1020,8 @@
     el.tempoSlider.value = metroBpm;
     el.tempoValue.textContent = metroBpm;
     setActiveSubdivButton();
+    setupMediaSession();
+    regenerateClickLoop(metroBpm, metroSubdiv);
   })();
 
   el.metronomeBtn.addEventListener('click', () => {
@@ -966,6 +1041,7 @@
     el.tempoSlider.value = metroBpm;
     el.tempoValue.textContent = metroBpm;
     saveMetronomeState();
+    scheduleRegenerate();
   }
 
   el.tempoSlider.addEventListener('input', () => {
@@ -981,6 +1057,7 @@
     metroSubdiv = parseInt(btn.dataset.subdiv, 10);
     setActiveSubdivButton();
     saveMetronomeState();
+    scheduleRegenerate();
   });
 
   el.metronomeToggle.addEventListener('click', () => {
