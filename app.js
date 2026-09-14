@@ -859,28 +859,62 @@
   })();
 
   // ---------- Metronome ----------
-  // Playback is a looping <audio> element rather than a Web Audio scheduler:
-  // mobile browsers throttle setTimeout/requestAnimationFrame and suspend
-  // AudioContext as soon as the page is backgrounded (switching to another
-  // app, locking the screen), because pure Web Audio isn't recognized by the
-  // OS as "media playback". A real <audio> element handed to the native
-  // media pipeline, plus a registered MediaSession, keeps playing through
-  // that suspension the way a music app would.
+  // Playback is a live Web Audio graph whose output is routed into a real
+  // <audio> element (via a MediaStreamAudioDestinationNode) instead of
+  // pure Web Audio straight to speakers, or a rendered file looped by the
+  // <audio> element itself:
+  //  - Pure Web Audio to speakers gets suspended by mobile browsers as soon
+  //    as the page is backgrounded (switching to another app), because the
+  //    OS doesn't recognize it as "media playback".
+  //  - A rendered click loop played as an <audio> file survives backgrounding
+  //    (the OS treats it as real media playback) but <audio>'s own `loop`
+  //    restart is not sample-accurate in every browser (notably iOS Safari),
+  //    so an audible seam appears every time the file wraps around - a
+  //    longer file just makes the seam rarer, never removes it.
+  // Feeding a live AudioContext's output through a MediaStreamAudioDestinationNode
+  // into an <audio> element's srcObject gets both properties: the actual
+  // looping is done by AudioBufferSourceNode.loop, which the spec guarantees
+  // is sample-accurate (it's just a circular read of one buffer, no file
+  // restart involved), while the <audio> element playing that stream is what
+  // keeps the OS treating this as real media playback across an app switch.
+  // A quiet continuous 20Hz tone is mixed in for the same reason the old
+  // keep-alive oscillator existed: true digital silence between clicks reads
+  // as "no audio" to a Bluetooth output's power management and it drops the
+  // link into standby, causing an audible re-negotiation delay before the
+  // next click. A genuinely non-zero (but inaudible) signal keeps the link
+  // awake without anyone hearing it.
   const METRONOME_KEY = 'jianpu-metronome-v1';
 
   let metroBpm = 100;
   let metroSubdiv = 1;
   let metroPlaying = false;
-  let currentBlobUrl = null;
   let regenTimer = null;
   let regenToken = 0;
 
+  let metroCtx = null;
+  let metroGain = null;
+  let metroStreamDest = null;
+  let metroSourceNode = null;
+
   const metroAudio = new Audio();
-  metroAudio.loop = true;
   metroAudio.preload = 'auto';
   metroAudio.setAttribute('playsinline', '');
   metroAudio.style.display = 'none';
   document.body.appendChild(metroAudio);
+
+  // Constructing an AudioContext doesn't require a user gesture (it just
+  // starts 'suspended' until resume()d from one, which startMetronome does),
+  // so it's safe to set the whole graph up eagerly at load time.
+  function getMetroContext() {
+    if (!metroCtx) {
+      metroCtx = new (window.AudioContext || window.webkitAudioContext)();
+      metroGain = metroCtx.createGain();
+      metroStreamDest = metroCtx.createMediaStreamDestination();
+      metroGain.connect(metroStreamDest);
+      metroAudio.srcObject = metroStreamDest.stream;
+    }
+    return metroCtx;
+  }
 
   function loadMetronomeState() {
     try {
@@ -903,66 +937,27 @@
     });
   }
 
-  // A run of whole beats (each with its accent + subdivision clicks) is
-  // rendered offline and looped natively by <audio> - repeating this unit
-  // forever reproduces the same accent-on-every-beat pattern the old live
-  // scheduler produced. The unit spans several seconds rather than a single
-  // beat because <audio>'s loop isn't guaranteed sample-accurate across
-  // browsers - each wrap can add a sliver of gap, and wrapping less often
-  // shrinks how much of that error accumulates over time (it can't remove
-  // clock drift between two independent devices' audio hardware, only
-  // reduce the extra error this implementation itself would add on top).
-  // A quiet continuous 20Hz tone is mixed in for the same reason the old
-  // keep-alive oscillator existed: true digital silence between clicks
-  // reads as "no audio" to a Bluetooth output's power management and it
-  // drops the link into standby, causing an audible re-negotiation delay
-  // before the next click. A genuinely non-zero (but inaudible) signal
-  // keeps the link awake without anyone hearing it.
-  const LOOP_TARGET_SECONDS = 6;
-
-  // Rendering at a hardcoded 44100Hz and letting the device's real output
-  // hardware (commonly 48000Hz on iPads, often 44100Hz on desktops) play it
-  // back is exactly the kind of mismatch that makes a clip run audibly fast
-  // or slow if anything along the way - the offline renderer, or the
-  // decoder handed the WAV later - ever assumes the hardware rate instead
-  // of reading the file's own declared rate. Rendering at the device's own
-  // native rate sidesteps that class of bug entirely: requested and actual
-  // are the same number, so there's nothing left to silently coerce.
-  let cachedSampleRate = null;
-  function getDeviceSampleRate() {
-    if (cachedSampleRate) return cachedSampleRate;
-    try {
-      const probe = new (window.AudioContext || window.webkitAudioContext)();
-      cachedSampleRate = probe.sampleRate || 44100;
-      probe.close();
-    } catch (e) {
-      cachedSampleRate = 44100;
-    }
-    return cachedSampleRate;
-  }
-
+  // The renderable unit is exactly one beat (accent click + any subdivision
+  // clicks inside it). It doesn't need to be longer: looping is handled by
+  // AudioBufferSourceNode.loop (see getMetroContext's comment above), which
+  // repeats a single buffer sample-accurately regardless of its length.
   async function buildClickLoopBuffer(bpm, subdiv) {
-    const sampleRate = getDeviceSampleRate();
+    const sampleRate = getMetroContext().sampleRate;
     const beatDuration = 60 / bpm;
-    const beatsPerLoop = Math.max(1, Math.round(LOOP_TARGET_SECONDS / beatDuration));
-    const loopDuration = beatDuration * beatsPerLoop;
-    const length = Math.max(1, Math.round(loopDuration * sampleRate));
+    const length = Math.max(1, Math.round(beatDuration * sampleRate));
     const ctx = new OfflineAudioContext(1, length, sampleRate);
 
-    for (let beat = 0; beat < beatsPerLoop; beat++) {
-      const beatStart = beat * beatDuration;
-      for (let i = 0; i < subdiv; i++) {
-        const t = beatStart + (beatDuration / subdiv) * i;
-        const accent = i === 0;
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.frequency.value = accent ? 1500 : 1000;
-        gain.gain.setValueAtTime(accent ? 0.9 : 0.45, t);
-        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
-        osc.connect(gain).connect(ctx.destination);
-        osc.start(t);
-        osc.stop(Math.min(t + 0.06, beatStart + beatDuration));
-      }
+    for (let i = 0; i < subdiv; i++) {
+      const t = (beatDuration / subdiv) * i;
+      const accent = i === 0;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = accent ? 1500 : 1000;
+      gain.gain.setValueAtTime(accent ? 0.9 : 0.45, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t);
+      osc.stop(Math.min(t + 0.06, beatDuration));
     }
 
     const keepAliveOsc = ctx.createOscillator();
@@ -971,61 +966,30 @@
     keepAliveOsc.frequency.value = 20;
     keepAliveOsc.connect(keepAliveGain).connect(ctx.destination);
     keepAliveOsc.start(0);
-    keepAliveOsc.stop(loopDuration);
+    keepAliveOsc.stop(beatDuration);
 
     return ctx.startRendering();
   }
 
-  function audioBufferToWavBlob(buffer) {
-    const numCh = buffer.numberOfChannels;
-    const sampleRate = buffer.sampleRate;
-    const dataSize = buffer.length * numCh * 2;
-    const arrayBuffer = new ArrayBuffer(44 + dataSize);
-    const view = new DataView(arrayBuffer);
-    const writeString = (offset, str) => {
-      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
-    };
-    writeString(0, 'RIFF');
-    view.setUint32(4, 36 + dataSize, true);
-    writeString(8, 'WAVE');
-    writeString(12, 'fmt ');
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true);
-    view.setUint16(22, numCh, true);
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * numCh * 2, true);
-    view.setUint16(32, numCh * 2, true);
-    view.setUint16(34, 16, true);
-    writeString(36, 'data');
-    view.setUint32(40, dataSize, true);
-
-    const channelData = [];
-    for (let ch = 0; ch < numCh; ch++) channelData.push(buffer.getChannelData(ch));
-    let offset = 44;
-    for (let i = 0; i < buffer.length; i++) {
-      for (let ch = 0; ch < numCh; ch++) {
-        const sample = Math.max(-1, Math.min(1, channelData[ch][i]));
-        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-        offset += 2;
-      }
+  function applyClickBuffer(buffer) {
+    const ctx = getMetroContext();
+    if (metroSourceNode) {
+      try { metroSourceNode.stop(); } catch (e) { /* already stopped */ }
+      metroSourceNode.disconnect();
     }
-    return new Blob([arrayBuffer], { type: 'audio/wav' });
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+    source.connect(metroGain);
+    source.start(0);
+    metroSourceNode = source;
   }
 
   async function regenerateClickLoop(bpm, subdiv) {
     const token = ++regenToken;
     const buffer = await buildClickLoopBuffer(bpm, subdiv);
     if (token !== regenToken) return; // superseded by a newer tempo/subdiv change
-    const url = URL.createObjectURL(audioBufferToWavBlob(buffer));
-    const oldUrl = currentBlobUrl;
-    currentBlobUrl = url;
-    const wasPlaying = metroPlaying && !metroAudio.paused;
-    metroAudio.src = url;
-    if (wasPlaying) {
-      metroAudio.currentTime = 0;
-      metroAudio.play().catch(() => {});
-    }
-    if (oldUrl) URL.revokeObjectURL(oldUrl);
+    applyClickBuffer(buffer);
   }
 
   function scheduleRegenerate() {
@@ -1048,7 +1012,7 @@
   }
 
   function startMetronome() {
-    metroAudio.currentTime = 0;
+    getMetroContext().resume().catch(() => {});
     const playPromise = metroAudio.play();
     metroPlaying = true;
     el.metronomeToggle.textContent = '⏸ 停止';
@@ -1072,12 +1036,22 @@
   function stopMetronome() {
     metroPlaying = false;
     metroAudio.pause();
+    if (metroCtx) metroCtx.suspend().catch(() => {});
     updateMediaSessionState('paused');
     el.metronomeToggle.textContent = '▶ 開始';
     el.metronomeToggle.classList.remove('playing');
     el.metronomeBtn.classList.remove('playing');
     detachShakeListener();
   }
+
+  // If the OS did suspend the AudioContext anyway (e.g. after a long lock
+  // screen), recover automatically once the page is foregrounded again
+  // rather than leaving a silently-dead metronome that still shows "playing".
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden || !metroPlaying || !metroCtx) return;
+    if (metroCtx.state === 'suspended') metroCtx.resume().catch(() => {});
+    if (metroAudio.paused) metroAudio.play().catch(() => {});
+  });
 
   // ---------- Shake-to-mute: stop the metronome if the device is shaken ----------
   const SHAKE_THRESHOLD = 15; // m/s^2 change between readings
