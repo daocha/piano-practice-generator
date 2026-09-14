@@ -33,7 +33,19 @@
     twoHandMode: document.getElementById('twoHandMode'),
     allowTie: document.getElementById('allowTie'),
     tieProbability: document.getElementById('tieProbability'),
+    twoHandRangeHint: document.getElementById('twoHandRangeHint'),
   };
+
+  // A service-worker update can briefly pair a new script with an older
+  // cached page. Keep the validation message available in that transition.
+  if (!el.twoHandRangeHint) {
+    const hint = document.createElement('div');
+    hint.id = 'twoHandRangeHint';
+    hint.className = 'adv-hint two-hand-range-hint';
+    hint.setAttribute('aria-live', 'polite');
+    el.twoHandMode.closest('.adv-section').appendChild(hint);
+    el.twoHandRangeHint = hint;
+  }
 
   // ---------- Helpers ----------
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -120,6 +132,11 @@
   const STOP_PROB = [0.4, 0.45, 0.7, 0.85];
   const DOT_PROB = 0.22;
   const TRIPLET_PROB = 0.22;
+  // In two-hand mode reserve three scale degrees between the two zones.
+  // With two notes available to each hand this needs at least seven notes
+  // in the combined range.
+  const HAND_ZONE_GAP = 3;
+  const MIN_TWO_HAND_RANGE = 2 + HAND_ZONE_GAP + 2;
 
   // ---------- Rhythm generation ----------
   // Recursively subdivides a beat's ticks (1 tick = one "smallest unit",
@@ -177,8 +194,9 @@
   // immediate repeat of the previous pitch when the selected range allows
   // it. `noteMin`/`noteMax` are a 1-21 position (7 degrees x 3 octaves),
   // decoded into {degree, octave} for rendering.
-  function applyRestsAndValues(notes, config) {
-    const { noteMin, noteMax, allowRest, restProbability } = config;
+  function applyRestsAndValues(notes, config, range) {
+    const { allowRest, restProbability } = config;
+    const { noteMin, noteMax } = range || config;
     let prev = null;
     notes.forEach((n) => {
       if (allowRest && Math.random() < restProbability) {
@@ -229,9 +247,26 @@
     }
   }
 
+  // Treat the selected range as the combined range for both hands. The lower
+  // half belongs to the left hand and the upper half to the right hand; three
+  // central scale degrees are deliberately unused as a hand-position buffer.
+  // The returned order is right, left to match the display voice order.
+  function splitTwoHandRange(noteMin, noteMax) {
+    const count = noteMax - noteMin + 1;
+    if (count < MIN_TWO_HAND_RANGE) return null;
+
+    const leftCount = Math.floor((count - HAND_ZONE_GAP) / 2);
+    const rightCount = count - HAND_ZONE_GAP - leftCount;
+    return [
+      { noteMin: noteMax - rightCount + 1, noteMax },
+      { noteMin, noteMax: noteMin + leftCount - 1 },
+    ];
+  }
+
   function generateScore(config) {
     const { beatsPerMeasure, totalMeasures, subdivision, allowDot, twoHandMode } = config;
     const voiceCount = twoHandMode ? 2 : 1;
+    const handRanges = twoHandMode ? splitTwoHandRange(config.noteMin, config.noteMax) : null;
     const rows = [];
     for (let m = 0; m < totalMeasures; m++) {
       const voices = Array.from({ length: voiceCount }, () => []);
@@ -239,7 +274,7 @@
         const shape = generateBeat(subdivision, allowDot);
         for (let v = 0; v < voiceCount; v++) {
           const notes = cloneShape(shape);
-          applyRestsAndValues(notes, config);
+          applyRestsAndValues(notes, config, handRanges ? handRanges[v] : null);
           voices[v].push(notes);
         }
       }
@@ -595,6 +630,15 @@
     generating = true;
     const config = readConfig();
 
+    if (config.twoHandMode && !splitTwoHandRange(config.noteMin, config.noteMax)) {
+      generating = false;
+      el.twoHandMode.checked = false;
+      twoHandRangeErrorActive = true;
+      updateTwoHandRangeHint();
+      el.advancedModal.classList.remove('hidden');
+      return;
+    }
+
     if (showOverlay) el.loadingOverlay.classList.remove('hidden');
     el.generateBtn.disabled = true;
 
@@ -638,6 +682,57 @@
 
   populateOctaveSelect(el.octaveMin, 8); // mid-octave 1
   populateOctaveSelect(el.octaveMax, 12); // mid-octave 5
+  let twoHandRangeErrorActive = false;
+
+  function formatPitch(position) {
+    const octave = Math.floor((position - 1) / 7);
+    const degree = ((position - 1) % 7) + 1;
+    return `${OCTAVE_LABELS[octave]}${degree}`;
+  }
+
+  function updateTwoHandRangeHint() {
+    let min = clamp(parseInt(el.octaveMin.value, 10) || 8, 1, 21);
+    let max = clamp(parseInt(el.octaveMax.value, 10) || 12, 1, 21);
+    if (min > max) [min, max] = [max, min];
+    const ranges = splitTwoHandRange(min, max);
+    const show = el.twoHandMode.checked || twoHandRangeErrorActive;
+
+    el.twoHandRangeHint.hidden = !show;
+    el.twoHandRangeHint.classList.toggle('is-visible', show);
+    el.twoHandRangeHint.classList.toggle('adv-warning', twoHandRangeErrorActive);
+    if (!show) return;
+
+    if (!ranges) {
+      const suggestedMin = min <= 21 - (MIN_TWO_HAND_RANGE - 1)
+        ? min
+        : max - (MIN_TWO_HAND_RANGE - 1);
+      const suggestedMax = suggestedMin + MIN_TWO_HAND_RANGE - 1;
+      el.twoHandRangeHint.textContent = `音符範圍不足，無法切分雙手（目前 ${max - min + 1} 個音）。至少需要 ${MIN_TWO_HAND_RANGE} 個連續音；建議設為 ${formatPitch(suggestedMin)}–${formatPitch(suggestedMax)} 或更寬。`;
+      return;
+    }
+
+    const [right, left] = ranges;
+    el.twoHandRangeHint.textContent = `自動分區：左手 ${formatPitch(left.noteMin)}–${formatPitch(left.noteMax)}；右手 ${formatPitch(right.noteMin)}–${formatPitch(right.noteMax)}（中央保留 ${HAND_ZONE_GAP} 個音避免碰撞）。`;
+  }
+
+  function validateTwoHandMode() {
+    let min = clamp(parseInt(el.octaveMin.value, 10) || 8, 1, 21);
+    let max = clamp(parseInt(el.octaveMax.value, 10) || 12, 1, 21);
+    if (min > max) [min, max] = [max, min];
+
+    if (el.twoHandMode.checked && !splitTwoHandRange(min, max)) {
+      el.twoHandMode.checked = false;
+      twoHandRangeErrorActive = true;
+      updateTwoHandRangeHint();
+      return;
+    }
+    if (splitTwoHandRange(min, max)) twoHandRangeErrorActive = false;
+    updateTwoHandRangeHint();
+  }
+
+  [el.octaveMin, el.octaveMax, el.twoHandMode].forEach((input) => {
+    input.addEventListener('change', validateTwoHandMode);
+  });
 
   el.advancedBtn.addEventListener('click', () => {
     el.advancedModal.classList.remove('hidden');
@@ -755,6 +850,8 @@
     el.twoHandMode.checked = !!c.twoHandMode;
     el.allowTie.checked = !!c.allowTie;
     if (c.tieProbability != null) el.tieProbability.value = Math.round(c.tieProbability * 100);
+
+    validateTwoHandMode();
 
     renderScore(saved.rows, c.beatsPerMeasure);
     if (saved.background) el.scoreWrap.style.background = saved.background;
