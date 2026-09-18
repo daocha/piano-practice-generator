@@ -1,5 +1,5 @@
 services:
-  piano-practice-generator:
+  app:
     build: .
     container_name: piano-practice-generator
     ports:
@@ -12,3 +12,9 @@ services:
     # volumes:
     #   - ./certs:/app/certs
     restart: unless-stopped
+    networks:
+      - daocha-network
+networks:
+  daocha-network:
+    external: true
+    name: docker-start_daocha-network
