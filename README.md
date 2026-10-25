@@ -76,6 +76,7 @@ docker compose up -d
 
 ```
 index.html    主頁面結構
+404.html      找不到頁面時顯示的錯誤頁(樣式內嵌)
 style.css     深色主題樣式
 app.js        節奏生成、渲染、節拍器、進階設定、下拉手勢等邏輯
 manifest.webmanifest / sw.js   PWA 安裝與離線快取
