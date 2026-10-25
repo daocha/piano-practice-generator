@@ -1,4 +1,4 @@
-const CACHE_NAME = 'jianpu-gen-v3';
+const CACHE_NAME = 'jianpu-gen-v4';
 const ASSETS = [
   './',
   './index.html',

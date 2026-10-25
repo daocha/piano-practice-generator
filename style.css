@@ -47,7 +47,8 @@ body {
 }
 
 .advanced-btn,
-.metronome-btn {
+.metronome-btn,
+.install-btn {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -63,6 +64,10 @@ body {
 
 .advanced-btn {
   margin-left: auto;
+}
+
+.install-btn[hidden] {
+  display: none;
 }
 
 .advanced-btn.open {
