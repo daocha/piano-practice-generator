@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>找不到頁面 · 簡譜練習產生器</title>
+<meta name="theme-color" content="#10131a">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<!-- Styles are inlined so this page renders correctly at any URL depth -->
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #10131a;
+    --panel: #181c26;
+    --panel-border: #2a3040;
+    --text: #e8ebf2;
+    --text-dim: #8891a3;
+    --accent: #4ade80;
+    --accent-dim: #2f6b47;
+    --input-bg: #0d0f15;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang TC", "PingFang SC", sans-serif;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+
+  .app-title {
+    text-align: center;
+    font-family: "Snell Roundhand", "Bradley Hand", "Brush Script MT", "Segoe Script", cursive;
+    font-size: 1.35rem;
+    color: var(--accent);
+    background: var(--panel);
+    border-bottom: 1px solid var(--panel-border);
+    padding: 5px 12px 3px;
+    padding-top: max(5px, env(safe-area-inset-top));
+  }
+
+  main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    padding: 24px 16px;
+    text-align: center;
+  }
+
+  /* "4 0 4" in jianpu style: 0 is a rest, with a dotted-octave flourish */
+  .code {
+    display: flex;
+    gap: 0.5em;
+    font-size: clamp(4rem, 18vw, 7rem);
+    font-weight: 600;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .code span { position: relative; }
+
+  .code .rest { color: var(--text-dim); }
+
+  .code .high::before {
+    content: "";
+    position: absolute;
+    top: -0.18em;
+    left: 50%;
+    width: 0.1em;
+    height: 0.1em;
+    border-radius: 50%;
+    background: var(--accent);
+    transform: translateX(-50%);
+  }
+
+  .barline {
+    width: min(280px, 70vw);
+    height: 2px;
+    background: var(--panel-border);
+  }
+
+  h1 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+  }
+
+  p {
+    margin: 0;
+    color: var(--text-dim);
+    line-height: 1.6;
+  }
+
+  .home-btn {
+    margin-top: 6px;
+    display: inline-block;
+    background: var(--accent-dim);
+    border: 1px solid var(--accent);
+    color: var(--text);
+    text-decoration: none;
+    border-radius: 999px;
+    padding: 10px 22px;
+    font-size: 1rem;
+  }
+
+  .home-btn:hover,
+  .home-btn:focus-visible { background: var(--accent); color: var(--bg); }
+</style>
+</head>
+<body>
+
+<div class="app-title">DCHA Piano Practice Generator</div>
+
+<main>
+  <div class="code" aria-label="404">
+    <span class="high">4</span><span class="rest">0</span><span class="high">4</span>
+  </div>
+  <div class="barline"></div>
+  <h1>找不到這個頁面</h1>
+  <p>這一小節是休止符 — 你要找的頁面不存在或已被移除。</p>
+  <a class="home-btn" href="/">回到練習產生器</a>
+</main>
+
+</body>
+</html>

@@ -38,10 +38,32 @@ const MIME = {
 };
 
 function safeJoin(root, urlPath) {
-  const decoded = decodeURIComponent(urlPath.split('?')[0]);
+  let decoded;
+  try {
+    decoded = decodeURIComponent(urlPath.split('?')[0]);
+  } catch (e) {
+    return null; // malformed percent-encoding
+  }
   const target = path.normalize(path.join(root, decoded));
   if (!target.startsWith(root)) return null; // block path traversal
   return target;
+}
+
+const NOT_FOUND_PAGE = path.join(ROOT, '404.html');
+
+function sendNotFound(res) {
+  fs.readFile(NOT_FOUND_PAGE, (err, body) => {
+    if (err) {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('404 Not Found');
+      return;
+    }
+    res.writeHead(404, {
+      'Content-Type': MIME['.html'],
+      'Cache-Control': 'no-cache',
+    });
+    res.end(body);
+  });
 }
 
 function requestHandler(req, res) {
@@ -53,9 +75,7 @@ function requestHandler(req, res) {
   }
   fs.stat(filePath, (err, stat) => {
     if (err || !stat.isFile()) {
-      // SPA-ish fallback for extensionless paths -> not needed here, just 404
-      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('404 Not Found');
+      sendNotFound(res);
       return;
     }
     const ext = path.extname(filePath).toLowerCase();
