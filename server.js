@@ -53,7 +53,7 @@ const NOT_FOUND_PAGE = path.join(ROOT, '404.html');
 
 // Relative path from the requested URL's directory back to the app root, e.g.
 // "/a/b/c" -> "../../". Relative (not "/") so it works behind a reverse proxy
-// that mounts the app under a prefix like /piano/ and strips it.
+// that mounts the app under any path prefix and strips it.
 function relativeRoot(urlPath) {
   const depth = urlPath.split('?')[0].split('/').length - 2;
   return depth > 0 ? '../'.repeat(depth) : './';
