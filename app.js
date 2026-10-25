@@ -1179,4 +1179,26 @@
       navigator.serviceWorker.register('sw.js').catch(() => {});
     });
   }
+
+  // ---------- Install button ----------
+  // Chrome 154–156 on Android counts any installed app on the origin as this one in its own
+  // menu, so apps sharing a host can't be installed side by side from there. The page's own
+  // prompt still checks by scope, so offer it here.
+  const installBtn = document.getElementById('installBtn');
+  let installPrompt = null;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    installPrompt = e;
+    installBtn.hidden = false;
+  });
+  installBtn.addEventListener('click', () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    installPrompt = null;
+    installBtn.hidden = true;
+  });
+  window.addEventListener('appinstalled', () => {
+    installPrompt = null;
+    installBtn.hidden = true;
+  });
 })();
