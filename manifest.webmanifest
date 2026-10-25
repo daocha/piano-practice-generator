@@ -2,6 +2,7 @@
   "name": "簡譜練習產生器",
   "short_name": "簡譜產生器",
   "description": "根據自訂條件隨機產生簡譜練習譜例",
+  "id": "piano-practice-generator",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
