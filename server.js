@@ -51,8 +51,16 @@ function safeJoin(root, urlPath) {
 
 const NOT_FOUND_PAGE = path.join(ROOT, '404.html');
 
-function sendNotFound(res) {
-  fs.readFile(NOT_FOUND_PAGE, (err, body) => {
+// Relative path from the requested URL's directory back to the app root, e.g.
+// "/a/b/c" -> "../../". Relative (not "/") so it works behind a reverse proxy
+// that mounts the app under a prefix like /piano/ and strips it.
+function relativeRoot(urlPath) {
+  const depth = urlPath.split('?')[0].split('/').length - 2;
+  return depth > 0 ? '../'.repeat(depth) : './';
+}
+
+function sendNotFound(req, res) {
+  fs.readFile(NOT_FOUND_PAGE, 'utf8', (err, html) => {
     if (err) {
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('404 Not Found');
@@ -62,7 +70,8 @@ function sendNotFound(res) {
       'Content-Type': MIME['.html'],
       'Cache-Control': 'no-cache',
     });
-    res.end(body);
+    const base = `<base href="${relativeRoot(req.url)}">`;
+    res.end(html.replace('<head>', `<head>\n${base}`));
   });
 }
 
@@ -75,7 +84,7 @@ function requestHandler(req, res) {
   }
   fs.stat(filePath, (err, stat) => {
     if (err || !stat.isFile()) {
-      sendNotFound(res);
+      sendNotFound(req, res);
       return;
     }
     const ext = path.extname(filePath).toLowerCase();

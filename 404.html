@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>找不到頁面 · 簡譜練習產生器</title>
 <meta name="theme-color" content="#10131a">
-<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
-<!-- Styles are inlined so this page renders correctly at any URL depth -->
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<!-- server.js injects a relative <base href> here so links resolve to the app root,
+     even when mounted under a path prefix (e.g. /piano/). Styles are inlined for the same reason. -->
 <style>
   :root {
     color-scheme: dark;
@@ -130,7 +131,7 @@
   <div class="barline"></div>
   <h1>找不到這個頁面</h1>
   <p>這一小節是休止符 — 你要找的頁面不存在或已被移除。</p>
-  <a class="home-btn" href="/">回到練習產生器</a>
+  <a class="home-btn" href="./">回到練習產生器</a>
 </main>
 
 </body>
