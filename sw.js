@@ -1,4 +1,4 @@
-const CACHE_NAME = 'jianpu-gen-v4';
+const CACHE_NAME = 'jianpu-gen-v5';
 const ASSETS = [
   './',
   './index.html',
@@ -10,9 +10,13 @@ const ASSETS = [
   './icons/apple-touch-icon.png'
 ];
 
+// The server lets browsers keep app.js and style.css for hours under unversioned URLs, so
+// fetch with cache: 'reload' to fill a new cache from the network, not the HTTP cache.
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS)).then(() => self.skipWaiting())
+    caches.open(CACHE_NAME)
+      .then((cache) => cache.addAll(ASSETS.map((url) => new Request(url, { cache: 'reload' }))))
+      .then(() => self.skipWaiting())
   );
 });
 
